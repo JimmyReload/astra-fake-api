@@ -67,6 +67,7 @@ Anthropic SDK 同理，`base_url` 指到 `http://127.0.0.1:8787` 即可。
 | `server.py` | Python 版服务本体，只用标准库（Python 3.10+） |
 | `art_hd.txt` | 默认那版图（照片转 ASCII，70 行 × 130 列）—— **改这个文件即可换图，无需重启** |
 | `smoke_test.py` | Python 版独立验收脚本，17 项判据 |
+| `verify_deployed.py` | 对**已部署**的线上地址做验收（自带浏览器签名，绕开 Cloudflare 的 1010） |
 | `demo_request.py` | 手动调一发看效果（`--port / --path / --model / --stream / --head`） |
 | `start.cmd` | 双击启动（纯 ASCII，避免 cmd 解析中文的坑） |
 | `extract_pasted_art.py` | 从 DSH 会话日志里把粘贴的图字节精确抠出来（手抄必然出错才写的） |
@@ -84,7 +85,7 @@ python smoke_test.py             # Python 版：17 项
 cd worker; node test_worker.mjs  # Worker 版：24 项
 ```
 
-实测 **17/17 通过**（2026-10-09，Python 3.13）：三套接口的非流式内容与 `art_hd.txt` 逐字节相同；
+实测 **17/17 通过**（2026-10-07，Python 3.13）：三套接口的非流式内容与 `art_hd.txt` 逐字节相同；
 三套流式拼接结果与非流式逐字符相同（证明没漏帧、没截断）；`[DONE]` 唯一；
 未知路径 / DELETE / OPTIONS / 畸形请求体一律 200 + 原图；`?art=` 三个版本都能切。
 脚本自己先探端口占用，被占就退出，避免 Windows 上 `SO_REUSEADDR` 双绑导致「旧进程冒充新服务」。
@@ -119,6 +120,23 @@ python build_art.py    # 打印三版图的字符数 / 行数 / sha256
 node test_worker.mjs   # 顺手验一遍
 ```
 
+### 已部署实例（2026-10-07）
+
+线上地址：**<https://astra-fake-api.3152841984.workers.dev>**（Version ID `e796474e`）
+
+用仓库自带的脚本验线上那份部署产物（不是验本地代码）：
+
+```powershell
+python verify_deployed.py https://astra-fake-api.3152841984.workers.dev
+```
+
+实测 **8/8 通过**：线上返回的图与本地 `art_hd.txt` 逐字节一致、流式拼接一致、`[DONE]` 唯一、
+未知路径照回裸图、CORS 与 `X-Powered-By: nailong-laughing-engine` 都在。
+
+> 部署时踩到的坑：`compatibility_date` 不能写「当天」。本机在 UTC+8，而 Cloudflare 按自己的时钟判定，
+> 本地已跨日而 UTC 还没跨日时会报 `Can't set compatibility date in the future`（code 10021）部署失败。
+> 所以这里固定写了一个明确已过去的日期。
+
 ## 设计上的几个刻意选择
 
 - **非标路径也回图**：这笑话的重点就是「任何调用」，所以未知路由不 404，而是 200 + 奶龙。
@@ -139,5 +157,6 @@ node test_worker.mjs   # 顺手验一遍
 - HD 版 130 列宽，手机/窄终端里会折行（这是图本身的分辨率，不是 bug）。
 - 没有实现 tool_calls / function calling / 图片输入等真实能力——反正回答了也还是奶龙。
 - 未做 TLS、未做并发压测；Python 版用 `ThreadingHTTPServer`，只适合自娱自乐和本机演示。
-- Worker 版只按 Node 模拟运行时验证过逻辑，**没有真机部署过**（缺 Cloudflare 凭据）——
-  首次 `wrangler deploy` 才算实测。
+- **`*.workers.dev` 会按 UA 挡人**：Cloudflare 把 python-urllib 之类的默认 UA 当机器人，
+  直接回 `403 / error code: 1010`；**同一个出口 IP 换成浏览器签名就是 200**。所以用脚本调线上时
+  要带浏览器 UA（`verify_deployed.py` 里已处理）。真浏览器访问不受影响，实测 Edge 正常。

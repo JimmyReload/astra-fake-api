@@ -1,7 +1,9 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "astra-fake-api"
 main = "src/index.js"
-compatibility_date = "2026-10-09"
+# 刻意取一个明确已过去的日期：本机在 UTC+8，而 Cloudflare 按自己的时钟判定，
+# 本地已跨日而 UTC 还没跨日时，写「当天」会被判成未来日期（实测 code 10021 部署失败）。
+compatibility_date = "2026-10-01"
 
 # 这个 Worker 不调用任何外部服务、不碰存储，只回一张 ASCII 图，
 # 免费额度（10 万请求/天）用不到零头。
