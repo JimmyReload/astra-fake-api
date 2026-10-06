@@ -128,8 +128,9 @@ Anthropic SDK 同理，`base_url` 指到 `http://127.0.0.1:8787` 即可（key �
 settings.yaml 是**热重载**的，改完不用重启 DSH，GUI 的模型选择器里立刻多出「奶龙(整活·只回 ASCII 图)」。
 
 **端到端实测（2026-10-07，全程未重启）**：拿 DSH 自己的 workflow 子代理走 `provider=nailong / model=gpt-6-astra`，
-返回 9,177 字符（带围栏）与 `art_hd.txt` 逐字节一致 —— 说明 DSH 的 LLM 栈（Node 内置 fetch / undici，
-UA 就是 `node`）能直接打这个接口，**不需要任何 UA 伪装**（见文末实测表）。
+拿到 **9,177 字符**的围栏正文（首行 ``` 与末行 ``` 都在、72 行），剥掉围栏后 **9,169 字符**与 `art_hd.txt`
+逐字节一致 —— 说明 DSH 的 LLM 栈（Node 内置 fetch / undici，UA 就是 `node`）能直接打这个接口，
+**不需要任何 UA 伪装**（见文末实测表）。
 撤掉 = 删掉上面那块 + `refs` 里的那一行，备份在 `settings.yaml.bak-20261007-061756`。
 
 ## 文件
