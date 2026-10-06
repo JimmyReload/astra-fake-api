@@ -1,0 +1,15 @@
+# 运行时产物
+__pycache__/
+*.py[cod]
+
+# 冒烟测试的服务器日志（每跑一次都会重建）
+_smoke_server.log
+
+# Cloudflare / Node
+node_modules/
+.wrangler/
+.dev.vars
+
+# 保险：永远不要误提交凭据
+.credentials.yaml
+*.token

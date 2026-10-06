@@ -1,0 +1,13 @@
+{
+  "name": "astra-fake-api-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "伪装成 ChatGPT Astra 的 Cloudflare Worker：任何调用都只返回一张奶龙 ASCII 图",
+  "scripts": {
+    "art": "python build_art.py",
+    "test": "node test_worker.mjs",
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy"
+  }
+}

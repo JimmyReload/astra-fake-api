@@ -1,0 +1,15 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "astra-fake-api"
+main = "src/index.js"
+compatibility_date = "2026-10-09"
+
+# 这个 Worker 不调用任何外部服务、不碰存储，只回一张 ASCII 图，
+# 免费额度（10 万请求/天）用不到零头。
+#
+# 部署：
+#   npx wrangler login      # 浏览器里点一下授权（只需一次）
+#   npx wrangler deploy     # 拿到 https://astra-fake-api.<你的子域>.workers.dev
+#
+# 不想装 wrangler 的话，也可以在 Cloudflare 控制台里
+# 「Workers & Pages → Create → Import a repository」直接选这个仓库，构建配置：
+#   Root directory: worker      Build command: （留空）      Deploy command: npx wrangler deploy

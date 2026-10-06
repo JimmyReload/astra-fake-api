@@ -1,0 +1,10 @@
+# 默认统一 LF，避免跨机器行尾转换
+* text=auto eol=lf
+
+# cmd 批处理保留 CRLF（老 cmd.exe 对 LF-only 的 goto/label 不可靠）
+*.cmd text eol=crlf
+
+# 这两份图必须逐字节稳定：验收脚本会拿它们做逐字节比对，
+# 一旦被行尾转换就会在别的机器上判「不相等」。
+art_hd.txt -text
+worker/src/art.js -text
