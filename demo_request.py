@@ -7,13 +7,18 @@
   python demo_request.py --stream             # 流式，逐帧计数
   python demo_request.py --path /v1/messages  # 换 Anthropic 外形
   python demo_request.py --path /i/am/nothing # 不存在也得给奶龙
+
+v1.1.0 起服务有鉴权：key 从 `--key` 或环境变量 NAILONG_API_KEY 取；本地起服务时
+若没带 `--api-key`，服务端不校验，这时不传 key 也能用。401/404 会原样把错误体打出来。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import urllib.error
 import urllib.request
 
 for _s in (sys.stdout, sys.stderr):
@@ -35,7 +40,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--path", default="/v1/chat/completions")
-    ap.add_argument("--model", default="astra-1")
+    ap.add_argument("--model", default="gpt-6-astra")
+    ap.add_argument("--key", default=os.environ.get("NAILONG_API_KEY", ""),
+                    help="API key（也可用环境变量 NAILONG_API_KEY；本地无鉴权服务可不填）")
     ap.add_argument("--stream", action="store_true")
     ap.add_argument("--head", type=int, default=9)
     args = ap.parse_args()
@@ -49,13 +56,24 @@ def main() -> int:
         payload = {"model": args.model, "messages": [{"role": "user", "content": "你是奶龙吗"}],
                    "stream": args.stream}
 
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer sk-fake"},
-        method="POST",
-    )
-    print(f"POST {url}  stream={args.stream}", flush=True)
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    headers = {"Content-Type": "application/json"}
+    if args.key:
+        headers["Authorization"] = f"Bearer {args.key}"
+
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
+                                 headers=headers, method="POST")
+    print(f"POST {url}  stream={args.stream}  model={args.model}  "
+          f"key={'有' if args.key else '未带'}", flush=True)
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        print(f"HTTP {exc.code}  <- 服务端把闸门关上了，错误体如下：", flush=True)
+        print("-" * 70, flush=True)
+        print(body[:800], flush=True)
+        return 1
+
+    with resp:
         print(f"HTTP {resp.status}  Content-Type={resp.headers.get('Content-Type')}  "
               f"X-Nailong={resp.headers.get('X-Nailong')}", flush=True)
 

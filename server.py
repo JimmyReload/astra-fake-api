@@ -10,6 +10,11 @@ ChatGPT-Astra 伪装 API —— 任何调用都只会返回一张「奶龙捧腹
   GET  /v1/models             (返回一堆不存在但很像样的 Astra 模型)
   ANY  其它任何路径/方法       (照回奶龙，绝不 404)
 
+正文形态：所有 JSON/SSE 包装盒里的正文都是「代码围栏 + 图」，即正文以一行 ``` 开头、
+以一行 ``` 结尾。原因是客户端按 Markdown 渲染时，裸 ASCII 图会被折行、连续空格被吞；
+非标路径那一条回的是裸图（text/plain），不套围栏（那里没有 Markdown 渲染）。
+围栏长度按图里最长的连续反引号动态计算，所以换图（art_hd.txt）不需要改代码。
+
 用法：
   python server.py                          # 默认 127.0.0.1:8787
   python server.py --host 0.0.0.0 --port 9000
@@ -19,8 +24,10 @@ ChatGPT-Astra 伪装 API —— 任何调用都只会返回一张「奶龙捧腹
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import os
+import secrets
 import socket
 import sys
 import time
@@ -36,16 +43,22 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 APP_NAME = "chatgpt-astra-fake"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 STARTED_AT = time.time()
 
-DEFAULT_MODEL = "astra-1"
+# 这五个 id 不是我编的，是**上游真实存在**的（2026-10-07 回源核对，两处独立证据）：
+#   - platform.openai.com/docs/models/gpt-6-astra → HTTP 200，标题 "GPT-6 Astra Model | OpenAI API"；
+#     同法查我 1.1.0 首版编的 gpt-5.2-astra / o5-astra-lite → 一律 HTTP 404（编的名字一眼假，已废弃）。
+#   - OpenRouter 的 gpt-6-astra 详情页列出同族真实变体：-pro / -20260903 / -high / -medium / -low
+#     / -xhigh；gpt-6-luna 亦为其 gpt-6 同族（官方文档页 HTTP 200）。
+# created 用的是上游公开的真实时间戳（gpt-6-astra ≈ 2026-09-03，gpt-6-luna ≈ 2026-10-06）。
+DEFAULT_MODEL = "gpt-6-astra"
 MODELS = [
-    {"id": "astra-1", "object": "model", "owned_by": "openai-deep-research", "created": 1750000000},
-    {"id": "astra-1-mini", "object": "model", "owned_by": "openai-deep-research", "created": 1750000000},
-    {"id": "astra-1-pro", "object": "model", "owned_by": "openai-deep-research", "created": 1750000000},
-    {"id": "chatgpt-astra-latest", "object": "model", "owned_by": "openai-deep-research", "created": 1750000000},
-    {"id": "gpt-5-astra", "object": "model", "owned_by": "openai", "created": 1750000000},
+    {"id": "gpt-6-astra", "object": "model", "owned_by": "openai", "created": 1788393600},
+    {"id": "gpt-6-astra-pro", "object": "model", "owned_by": "openai", "created": 1788393600},
+    {"id": "gpt-6-astra-20260903", "object": "model", "owned_by": "openai", "created": 1788393600},
+    {"id": "gpt-6-astra-high", "object": "model", "owned_by": "openai", "created": 1788393600},
+    {"id": "gpt-6-luna", "object": "model", "owned_by": "openai", "created": 1790100786},
 ]
 
 # ---------------------------------------------------------------------------
@@ -111,7 +124,72 @@ ART_ASCII = r"""
 # 供冒烟测试独立复核用的标记（测试脚本里也硬编码了同样的字样）
 ART_MARKERS = ("HA  HA  HA", "捧着肚子")
 
-MODEL_ALIASES = {m["id"] for m in MODELS} | {"gpt-4o", "gpt-4o-mini", "o1", "o3", "claude-3-5-sonnet"}
+# ---------------------------------------------------------------------------
+# 鉴权：①API key（谁在调）②模型白名单（调的哪个模型）
+# ---------------------------------------------------------------------------
+# 与 v1.0 的「任何调用都回奶龙、绝不 404」是有意冲突的取舍（2026-10-07 拍板加鉴权）：
+#   * 没有 key / key 不对  -> 401 invalid_api_key（带 WWW-Authenticate）
+#   * model 不在白名单里   -> 404 model_not_found
+#   * OPTIONS 例外：CORS 预检由浏览器自动发出、**不带 Authorization 头**，
+#     预检也校验的话所有浏览器端调用会直接崩在预检上，故预检永远放行。
+# key 必须走 ASCII 安全比较：hmac.compare_digest 对含非 ASCII 的 str 会直接抛 TypeError。
+API_KEY = ""                       # 由 main() 落地；空串 = 拒绝一切（fail-closed，不是放行）
+KEY_ENV = "NAILONG_API_KEY"        # 与 Worker 侧同名、也与 DSH 里那条凭据同名
+
+# 白名单 = 5 个**与上游同名**的 Astra id + 几个"大家会顺手填的真名"。
+# 设 ASTRA_STRICT_MODELS=1 就只认那 5 个（gpt-4o 之类会 404）。
+LEGACY_MODEL_ALIASES = ("gpt-4o", "gpt-4o-mini", "o1", "o3", "claude-3-5-sonnet")
+ALLOWED_MODELS = {m["id"] for m in MODELS} | set(LEGACY_MODEL_ALIASES)
+
+STRICT_WORDS = ("1", "true", "yes", "on")
+
+
+def allowed_models() -> set[str]:
+    if os.environ.get("ASTRA_STRICT_MODELS", "").strip().lower() in STRICT_WORDS:
+        return {m["id"] for m in MODELS}
+    return ALLOWED_MODELS
+
+
+def key_matches(candidate: str) -> bool:
+    if not API_KEY or not candidate:
+        return False
+    return hmac.compare_digest(candidate.strip().encode("utf-8"), API_KEY.encode("utf-8"))
+
+
+def extract_key(headers) -> str:
+    """真客户端怎么带 key 都认：Authorization: Bearer xxx / Authorization: xxx / x-api-key: xxx。"""
+    raw = (headers.get("Authorization") or "").strip()
+    if raw:
+        parts = raw.split(None, 1)
+        if len(parts) == 2 and parts[0].lower() in ("bearer", "token"):
+            return parts[1].strip()
+        return raw
+    for name in ("x-api-key", "X-Api-Key", "api-key", "x-auth-token"):
+        value = (headers.get(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def error_body(message: str, code: str, param: str | None = None) -> dict:
+    """OpenAI 风格的错误体（各家 SDK 都认这个形状）。"""
+    return {"error": {"message": message, "type": "invalid_request_error", "param": param, "code": code}}
+
+
+def auth_error() -> dict:
+    return error_body(
+        "Incorrect API key provided. You can find your API key at "
+        "https://platform.openai.com/account/api-keys.",
+        "invalid_api_key",
+    )
+
+
+def model_error(model: str) -> dict:
+    return error_body(
+        f"The model '{model}' does not exist or you do not have access to it.",
+        "model_not_found",
+        "model",
+    )
 
 
 HD_ART_PATH = Path(__file__).resolve().parent / "art_hd.txt"
@@ -147,6 +225,24 @@ def pick_art(query_art: str | None) -> str:
     if wanted.startswith("hd"):
         return load_hd_art() or ART_BLOCKS
     return ART_BLOCKS
+
+
+def fence_for(art: str) -> str:
+    """围栏长度按图里最长的连续反引号算（默认 3）——换图不需要改代码。
+
+    裸 ASCII 图直接塞进 Markdown 会被折行、连续空格被吞，所以正文必须包代码块；
+    而"换张图就能改内容"是本项目的用法之一，故不能写死成三个反引号。
+    """
+    longest = run = 0
+    for ch in art:
+        run = run + 1 if ch == "`" else 0
+        longest = max(longest, run)
+    return "`" * max(3, longest + 1)
+
+
+def as_markdown_block(art: str) -> str:
+    fence = fence_for(art)
+    return f"{fence}\n{art}\n{fence}"
 
 
 def art_tokens(text: str) -> int:
@@ -389,8 +485,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _send_json(self, obj: dict, status: int = 200) -> None:
-        self._send(status, json.dumps(obj, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+    def _send_json(self, obj: dict, status: int = 200, extra: dict | None = None) -> None:
+        self._send(status, json.dumps(obj, ensure_ascii=False).encode("utf-8"),
+                   "application/json; charset=utf-8", extra)
 
     def _send_sse(self, frames, extra: dict | None = None) -> None:
         self.send_response(200)
@@ -438,13 +535,27 @@ class Handler(BaseHTTPRequestHandler):
                 data = {}
 
         model = str(data.get("model") or qs.get("model", [DEFAULT_MODEL])[0])
-        art = pick_art(qs.get("art", [None])[0])
+        raw_art = pick_art(qs.get("art", [None])[0])
+        # 所有 JSON/SSE 包装盒里的正文 = 代码围栏 + 图（避免客户端按 Markdown 渲染时折行、吞空格）；
+        # 裸图只留给非标路径那一条（text/plain，那里没有 Markdown 渲染）。
+        art = as_markdown_block(raw_art)
         stream_qs = qs.get("stream", ["0"])[0].lower() in ("1", "true", "yes", "on")
         stream = bool(data.get("stream")) or stream_qs
         prompt_tokens = approx_prompt_tokens(raw)
 
+        # ---- 鉴权闸门（CORS 预检除外，理由见 KEY_ENV 那一段的注释）----------
+        if self.command != "OPTIONS":
+            if not key_matches(extract_key(self.headers)):
+                self._log(path, model, False, "401 没有对得上的 API key")
+                self._send_json(auth_error(), 401, {"WWW-Authenticate": 'Bearer realm="chatgpt-astra"'})
+                return
+            if model not in allowed_models():
+                self._log(path, model, False, "404 模型不在白名单里")
+                self._send_json(model_error(model), 404)
+                return
+
         if trimmed == "/v1/models" or trimmed == "/models":
-            self._log(path, model, False, f"卖出 {len(MODELS)} 个并不存在的模型")
+            self._log(path, model, False, f"卖出 {len(MODELS)} 个模型（id 与上游一致）")
             self._send_json({"object": "list", "data": MODELS})
 
         elif trimmed in ("/v1/chat/completions", "/chat/completions"):
@@ -478,7 +589,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             # 顽固到底：任何别的调用也只会拿到奶龙
             self._log(path, model, False, "非标路径 → 照旧奶龙")
-            self._send(200, art.encode("utf-8"), "text/plain; charset=utf-8")
+            self._send(200, raw_art.encode("utf-8"), "text/plain; charset=utf-8")
 
     def do_GET(self):
         self._handle()
@@ -515,7 +626,15 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8787, help="监听端口，默认 8787")
     parser.add_argument("--art", default=None, choices=["hd", "blocks", "ascii"],
                         help="选哪一版奶龙：hd=照片版(art_hd.txt，默认) / blocks=手绘方块版 / ascii=纯 ASCII 版")
+    parser.add_argument("--api-key", default=None,
+                        help=f"要求的 API key；不给就读环境变量 {KEY_ENV}，都没有则随机生成并打印")
     args = parser.parse_args()
+
+    global API_KEY
+    API_KEY = (args.api_key or os.environ.get(KEY_ENV, "")).strip()
+    generated = not API_KEY
+    if generated:
+        API_KEY = "sk-astra-" + secrets.token_hex(16)
 
     if args.art:
         os.environ["ASTRA_ART"] = args.art
@@ -535,6 +654,10 @@ def main() -> int:
     print(f"  Responses: POST {base}/v1/responses", flush=True)
     print(f"  Anthropic: POST {base}/v1/messages", flush=True)
     print(f"  Models   : GET  {base}/v1/models", flush=True)
+    if generated:
+        print(f"  [!] 没给 key（--api-key 或环境变量 {KEY_ENV}）→ 本次随机生成，重启就变：", flush=True)
+    print(f"  API key  : {API_KEY}", flush=True)
+    print("  鉴权     : Authorization: Bearer <key> 或 x-api-key: <key>（OPTIONS 预检放行）", flush=True)
     if args.host in ("0.0.0.0", "::"):
         print("  [!] 已监听 0.0.0.0，局域网内任何设备都能来逗奶龙", flush=True)
     print("  Ctrl+C 停止", flush=True)
