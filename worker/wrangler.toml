@@ -5,6 +5,19 @@ main = "src/index.js"
 # 本地已跨日而 UTC 还没跨日时，写「当天」会被判成未来日期（实测 code 10021 部署失败）。
 compatibility_date = "2026-10-01"
 
+# 另挂一个自己的域名（2026-10-07 实测加入）：
+# *.workers.dev 会按 UA 判定来源，python-urllib 之类的默认 UA 会被边缘挡成
+# 403 / error code 1010（同一个出口 IP 换成浏览器签名就是 200）。挂到自己的 zone
+# 之后脚本类客户端不带浏览器 UA 也能调。首次 deploy 时 wrangler 会自动建好 DNS 记录。
+# 想撤掉：删掉下面这三行再 deploy 一次，或去控制台把该自定义域名删掉。
+routes = [
+  { pattern = "gpt.caar.fun", custom_domain = true }
+]
+# 必须显式写这行：一旦配置了 routes，wrangler 会默认把 workers.dev 关掉
+# （实测：加 routes 后旧 URL 直接 404，API 读数是 {"enabled": false}）。
+# 想去掉 workers.dev 只留自定义域名，把下面这行删掉再 deploy 即可。
+workers_dev = true
+
 # 这个 Worker 不调用任何外部服务、不碰存储，只回一张 ASCII 图，
 # 免费额度（10 万请求/天）用不到零头。
 #

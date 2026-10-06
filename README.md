@@ -76,7 +76,7 @@ Anthropic SDK 同理，`base_url` 指到 `http://127.0.0.1:8787` 即可。
 | `worker/src/art.js` | **自动生成**的三版图，由 `build_art.py` 从 `server.py` + `art_hd.txt` 产出（别手改） |
 | `worker/build_art.py` | 上面那个生成器 —— 图只有一份来源，防止两边跑偏 |
 | `worker/test_worker.mjs` | Worker 版独立验收脚本，24 项判据（纯 Node，不连云、不用装 wrangler） |
-| `worker/wrangler.toml` | 部署配置 |
+| `worker/wrangler.toml` | 部署配置（含 `gpt.caar.fun` 自定义域名路由、`workers_dev` 开关、日期与原因注释） |
 
 ## 验收
 
@@ -109,6 +109,9 @@ npx wrangler login     # 浏览器里点一下授权，只需一次
 npx wrangler deploy    # 输出 https://astra-fake-api.<你的子域>.workers.dev
 ```
 
+本仓库的 `wrangler.toml` 里已经有一条 `routes`，把 `gpt.caar.fun` 挂成了自定义域名 —— 换成你自己的域名只改那一行；
+删掉它并按需删掉 `workers_dev = true`，就只剩 `*.workers.dev` 一个入口。
+
 不想用命令行：Cloudflare 控制台 → **Workers & Pages → Create → Import a repository** → 选这个仓库 →
 **Root directory 填 `worker`**，构建命令留空，部署命令 `npx wrangler deploy`。之后每次 push 自动重部署。
 
@@ -122,20 +125,31 @@ node test_worker.mjs   # 顺手验一遍
 
 ### 已部署实例（2026-10-07）
 
-线上地址：**<https://astra-fake-api.3152841984.workers.dev>**（Version ID `e796474e`）
+两个入口（Version ID `aefb5ec2`，行为完全一致）：
+
+| 入口 | 地址 |
+| --- | --- |
+| 自定义域名 | **<https://gpt.caar.fun>** |
+| `*.workers.dev` | **<https://astra-fake-api.3152841984.workers.dev>** |
 
 用仓库自带的脚本验线上那份部署产物（不是验本地代码）：
 
 ```powershell
+python verify_deployed.py https://gpt.caar.fun
 python verify_deployed.py https://astra-fake-api.3152841984.workers.dev
 ```
 
-实测 **8/8 通过**：线上返回的图与本地 `art_hd.txt` 逐字节一致、流式拼接一致、`[DONE]` 唯一、
+实测两个入口各 **8/8 通过**：线上返回的图与本地 `art_hd.txt` 逐字节一致、流式拼接一致、`[DONE]` 唯一、
 未知路径照回裸图、CORS 与 `X-Powered-By: nailong-laughing-engine` 都在。
 
-> 部署时踩到的坑：`compatibility_date` 不能写「当天」。本机在 UTC+8，而 Cloudflare 按自己的时钟判定，
-> 本地已跨日而 UTC 还没跨日时会报 `Can't set compatibility date in the future`（code 10021）部署失败。
-> 所以这里固定写了一个明确已过去的日期。
+> 部署时踩到的三个坑（都实测过）：
+> 1. `compatibility_date` 不能写「当天」。本机在 UTC+8，而 Cloudflare 按自己的时钟判定，
+>    本地已跨日而 UTC 还没跨日时会报 `Can't set compatibility date in the future`（code 10021）部署失败。
+>    所以这里固定写了一个明确已过去的日期。
+> 2. **配了 `routes` 之后 wrangler 会默认关掉 `workers.dev`**：加自定义域名的第一次部署，旧 URL 当场变 404
+>    （API 读数是 `{"enabled": false}`），必须在 `wrangler.toml` 里显式写 `workers_dev = true` 才能两个入口并存。
+> 3. **挂自定义域名并不能绕开 1010**：`caar.fun` 这个 zone 的 `browser_check = on`，所以换成自己的域名后，
+>    默认 UA 依旧被挡（同一个 `error code: 1010`）。那是 zone 级设置，与 `*.workers.dev` 无关。
 
 ## 设计上的几个刻意选择
 
@@ -157,6 +171,8 @@ python verify_deployed.py https://astra-fake-api.3152841984.workers.dev
 - HD 版 130 列宽，手机/窄终端里会折行（这是图本身的分辨率，不是 bug）。
 - 没有实现 tool_calls / function calling / 图片输入等真实能力——反正回答了也还是奶龙。
 - 未做 TLS、未做并发压测；Python 版用 `ThreadingHTTPServer`，只适合自娱自乐和本机演示。
-- **`*.workers.dev` 会按 UA 挡人**：Cloudflare 把 python-urllib 之类的默认 UA 当机器人，
-  直接回 `403 / error code: 1010`；**同一个出口 IP 换成浏览器签名就是 200**。所以用脚本调线上时
-  要带浏览器 UA（`verify_deployed.py` 里已处理）。真浏览器访问不受影响，实测 Edge 正常。
+- **按 UA 挡机器人（`403 / error code: 1010`）**：Cloudflare 把 python-urllib 之类的默认 UA 当机器人，
+  直接回 403；**同一个出口 IP 换成浏览器签名就是 200**。所以用脚本调线上时要带浏览器 UA
+  （`verify_deployed.py` 里已处理），`curl` 则加 `-A "Mozilla/5.0 ..."`。真浏览器访问不受影响，实测 Edge 正常。
+  **换成自己的域名也躲不掉**（实测 `gpt.caar.fun` 同样 1010），起因是该 zone 的 `browser_check = on`；
+  想彻底放开得改那个 zone 的安全设置，而那会同时影响该 zone 下的其它站点，不建议为这个玩笑接口去动。
