@@ -60,6 +60,31 @@ for chunk in client.chat.completions.create(model="astra-1", messages=[], stream
 
 Anthropic SDK 同理，`base_url` 指到 `http://127.0.0.1:8787` 即可。
 
+### 接进 DSH 当可选模型（2026-10-07 已在本机接上）
+
+`~/.dsh/settings.yaml` 的 `llm-pi-ai.providers` 里加一块（模型清单得从 `GET /v1/models` 抄下来，pi-ai 不动态发现）：
+
+```yaml
+    nailong:
+      displayName: 奶龙(整活·只回 ASCII 图)
+      api: openai-completions
+      baseURL: https://gpt.caar.fun/v1
+      apiKeyEnv: NAILONG_API_KEY      # 值随便填，服务端零鉴权
+      defaultInput: [text]
+      models:
+        - id: astra-1
+          name: astra-1
+        # astra-1-mini / astra-1-pro / chatgpt-astra-latest / gpt-5-astra 同理
+```
+
+再往 `~/.dsh/.credentials.yaml` 的 `refs` 里加一行 `NAILONG_API_KEY: sk-nailong-laughing-placeholder`。
+settings.yaml 是**热重载**的，改完不用重启 DSH，GUI 的模型选择器里立刻多出「奶龙(整活·只回 ASCII 图)」。
+
+**端到端实测（2026-10-07，全程未重启）**：拿 DSH 自己的 workflow 子代理走 `provider=nailong / model=astra-1`，
+返回 **9,169 字符 / 70 个非空行**，与 `art_hd.txt` 逐字节一致 —— 说明 DSH 的 LLM 栈
+（Node 内置 fetch / undici，UA 就是 `node`）能直接打这个接口，**不需要任何 UA 伪装**（见文末实测表）。
+撤掉 = 删掉上面那块 + `refs` 里的那一行，备份在 `settings.yaml.bak-20261007-061756`。
+
 ## 文件
 
 | 文件 | 作用 |
@@ -182,6 +207,8 @@ python verify_deployed.py https://astra-fake-api.3152841984.workers.dev
   | `Anthropic/Python 0.40.0` | 200 | 200 |
   | `node-fetch/1.0` | 200 | 200 |
   | `axios/1.7.2` | 200 | 200 |
+  | `node`（Node 内置 fetch / undici —— **DSH 自己的 LLM 栈发的就是它**） | 200 | 200 |
+  | `undici` | 200 | 200 |
   | Edge 浏览器签名 | 200 | 200 |
 
   也就是说 **OpenAI / Anthropic SDK 直接指过来就能用**，不必伪造 UA；会踩坑的主要是 python-urllib 这一类默认客户端
