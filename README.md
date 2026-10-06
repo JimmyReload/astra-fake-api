@@ -67,7 +67,7 @@ Anthropic SDK 同理，`base_url` 指到 `http://127.0.0.1:8787` 即可。
 | `server.py` | Python 版服务本体，只用标准库（Python 3.10+） |
 | `art_hd.txt` | 默认那版图（照片转 ASCII，70 行 × 130 列）—— **改这个文件即可换图，无需重启** |
 | `smoke_test.py` | Python 版独立验收脚本，17 项判据 |
-| `verify_deployed.py` | 对**已部署**的线上地址做验收（自带浏览器签名，绕开 Cloudflare 的 1010） |
+| `verify_deployed.py` | 对**已部署**的线上地址做验收（固定带浏览器签名 UA，避开 CF 对 python-urllib 的 1010） |
 | `demo_request.py` | 手动调一发看效果（`--port / --path / --model / --stream / --head`） |
 | `start.cmd` | 双击启动（纯 ASCII，避免 cmd 解析中文的坑） |
 | `extract_pasted_art.py` | 从 DSH 会话日志里把粘贴的图字节精确抠出来（手抄必然出错才写的） |
@@ -149,7 +149,8 @@ python verify_deployed.py https://astra-fake-api.3152841984.workers.dev
 > 2. **配了 `routes` 之后 wrangler 会默认关掉 `workers.dev`**：加自定义域名的第一次部署，旧 URL 当场变 404
 >    （API 读数是 `{"enabled": false}`），必须在 `wrangler.toml` 里显式写 `workers_dev = true` 才能两个入口并存。
 > 3. **挂自定义域名并不能绕开 1010**：`caar.fun` 这个 zone 的 `browser_check = on`，所以换成自己的域名后，
->    默认 UA 依旧被挡（同一个 `error code: 1010`）。那是 zone 级设置，与 `*.workers.dev` 无关。
+>    python-urllib 这类签名依旧被挡（同一个 `error code: 1010`）。那是 zone 级设置，与 `*.workers.dev` 无关。
+>    不过实测 curl 与各家 SDK 的默认 UA 在两个入口都是 200 —— 详见文末「已知限制」里的实测表。
 
 ## 设计上的几个刻意选择
 
@@ -171,8 +172,19 @@ python verify_deployed.py https://astra-fake-api.3152841984.workers.dev
 - HD 版 130 列宽，手机/窄终端里会折行（这是图本身的分辨率，不是 bug）。
 - 没有实现 tool_calls / function calling / 图片输入等真实能力——反正回答了也还是奶龙。
 - 未做 TLS、未做并发压测；Python 版用 `ThreadingHTTPServer`，只适合自娱自乐和本机演示。
-- **按 UA 挡机器人（`403 / error code: 1010`）**：Cloudflare 把 python-urllib 之类的默认 UA 当机器人，
-  直接回 403；**同一个出口 IP 换成浏览器签名就是 200**。所以用脚本调线上时要带浏览器 UA
-  （`verify_deployed.py` 里已处理），`curl` 则加 `-A "Mozilla/5.0 ..."`。真浏览器访问不受影响，实测 Edge 正常。
-  **换成自己的域名也躲不掉**（实测 `gpt.caar.fun` 同样 1010），起因是该 zone 的 `browser_check = on`；
+- **按 UA 挡机器人（`403 / error code: 1010`）—— 但只挡特定签名**：实测（同一出口 IP，两个入口各测一遍）：
+
+  | User-Agent | `gpt.caar.fun` | `*.workers.dev` |
+  | --- | --- | --- |
+  | `Python-urllib/3.13` | **403 `error code: 1010`** | **403 `error code: 1010`** |
+  | `curl/8.9.1` | 200 | 200 |
+  | `OpenAI/Python 2.6.1` | 200 | 200 |
+  | `Anthropic/Python 0.40.0` | 200 | 200 |
+  | `node-fetch/1.0` | 200 | 200 |
+  | `axios/1.7.2` | 200 | 200 |
+  | Edge 浏览器签名 | 200 | 200 |
+
+  也就是说 **OpenAI / Anthropic SDK 直接指过来就能用**，不必伪造 UA；会踩坑的主要是 python-urllib 这一类默认客户端
+  （`verify_deployed.py` 因此仍固定带浏览器签名，让「服务坏了」和「被边缘挡了」不混在一起）。
+  起因是该 zone 的 `browser_check = on`，在请求进到 Worker 之前就生效，**换成自有域名也躲不掉**；
   想彻底放开得改那个 zone 的安全设置，而那会同时影响该 zone 下的其它站点，不建议为这个玩笑接口去动。

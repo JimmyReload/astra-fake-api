@@ -8,9 +8,12 @@
 为什么另开一个脚本：本地 `smoke_test.py` 打的是 127.0.0.1，证明不了**线上那份部署产物**
 和本地图一致。这个脚本拿线上地址把同一批判据再跑一遍（含流式拼接、响应头、未知路径）。
 
-注意：Cloudflare 对 `*.workers.dev` 会按 UA 判定来源，python-urllib 的默认 UA 会被挡在
-边缘（HTTP 403 / `error code: 1010`），而**同一个出口 IP** 换成浏览器签名就是 200 ——
-所以下面所有请求都带 BROWSER_HEADERS。这不是本 Worker 的行为，是 CF 免费子域的保护。
+注意：Cloudflare 会按 UA 挡人，但**只挡特定签名**。实测（同一出口 IP，两个入口各测一遍）：
+python-urllib 的默认 UA 一律 403 / `error code: 1010`，而 curl、openai-python、Anthropic SDK、
+node-fetch、axios、真 Edge 的默认 UA 全部 200。起因是 zone 的 `browser_check`（换自有域名也躲不掉），
+在请求进到 Worker 之前生效，本 Worker 内部无法自救。
+
+下面所有请求仍固定带 BROWSER_HEADERS —— 不是必需，而是不想让「服务坏了」与「被边缘挡了」混在一起。
 """
 import json
 import pathlib
