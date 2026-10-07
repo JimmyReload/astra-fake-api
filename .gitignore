@@ -13,3 +13,10 @@ node_modules/
 # 保险：永远不要误提交凭据
 .credentials.yaml
 *.token
+
+# 换图时的一次性工具与中间产物（不属于交付物；回滚点靠 git 历史即可）
+_*.py
+_*.txt
+art_hd.txt.bak-*
+art_hd_new.txt
+art_hd_new_preview.png

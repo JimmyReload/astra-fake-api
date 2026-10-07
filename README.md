@@ -66,9 +66,15 @@ python demo_request.py --path /whatever --key ...        # 连不存在的路径
 JSON/SSE 包装盒里的正文一律是「**一行 \`\`\` + 图 + 一行 \`\`\`**」；非标路径那一条回的是**裸图**（`text/plain`）。
 
 为什么要包：客户端（含 DSH 的 GUI）会把 assistant 正文按 Markdown 渲染，裸 ASCII 图里的连续空格会被折叠、
-130 列的长行会被折行，照片版当场糊掉——这是实测踩到的真问题。围栏长度不是写死 3，而是按图里最长连续
+长行会被折行，照片版当场糊掉——这是实测踩到的真问题。围栏长度不是写死 3，而是按图里最长连续
 反引号串 +1 动态算（`fence_for` / `fenceFor`），换图无需改代码；当前那张图里有 0 个反引号，所以正好是 3。
-带围栏的正文 = **9,177 字符**，裸图 = **9,169 字符**。
+带围栏的正文 = **4,253 字符**，裸图 = **4,245 字符**（现行那版图，53 行 × 93 列）。
+
+> 换图记录（2026-10-07）：这版图是从会话里贴进来的**块字符版**（`░▒▓`）替换掉原先的照片转 ASCII 版。
+> 旧图是 70 行 × 130 列 / 9,169 字符，回滚点留在 `art_hd.txt.bak-20261007-114556`。
+> 两版图的验收判据都是**动态**的（拿 `art_hd.txt` 现算围栏长度、逐字节比对），所以换图只需改这一个文件
+> 再跑一次 `python worker/build_art.py`；唯一写死的量是「图够大」的行数下限 `HD_MIN_LINES`，
+> 已随图从 60 调到 40（新图 53 行）。
 
 ## 鉴权（v1.1.0 起）
 
@@ -127,20 +133,30 @@ Anthropic SDK 同理，`base_url` 指到 `http://127.0.0.1:8787` 即可（key �
 再往 `~/.dsh/.credentials.yaml` 的 `refs` 里加一行 `NAILONG_API_KEY: sk-...`。
 settings.yaml 是**热重载**的，改完不用重启 DSH，GUI 的模型选择器里立刻多出「奶龙(整活·只回 ASCII 图)」。
 
-**端到端实测（2026-10-07，全程未重启）**：拿 DSH 自己的 workflow 子代理走 `provider=nailong / model=gpt-6-astra`，
-拿到 **9,177 字符**的围栏正文（首行 ``` 与末行 ``` 都在、72 行），剥掉围栏后 **9,169 字符**与 `art_hd.txt`
-逐字节一致 —— 说明 DSH 的 LLM 栈（Node 内置 fetch / undici，UA 就是 `node`）能直接打这个接口，
-**不需要任何 UA 伪装**（见文末实测表）。
+**端到端实测（2026-10-07 换图后重测，`_e2e_node.mjs`，9/9 通过）**：用与 DSH 的 LLM 栈**完全同款**的 HTTP 客户端
+（Node 内置 fetch / undici，发出的 `User-Agent` 就是 `node`）直接打 `https://gpt.caar.fun`，拿到
+**4,253 字符 / 55 行**的围栏正文（首行与末行都是三反引号围栏），剥掉围栏后 **4,245 字符**与 `art_hd.txt` 逐字节一致
+（基准 sha256 前 16 = `eeabf8049cbbcd…`）；流式 56 个内容帧 + 1 个 usage 帧拼接结果与非流式**逐字符相同**，
+`data: [DONE]` 恰好一个；未知路径回 4,245 字符的裸图。⇒ **DSH 的 LLM 栈能直接打这个接口，不需要任何 UA 伪装**
+（见文末实测表）。
 撤掉 = 删掉上面那块 + `refs` 里的那一行，备份在 `settings.yaml.bak-20261007-061756`。
+
+> 现状提醒（2026-10-07 回源）：本机 `settings.yaml` 里现在**只有 `pool` 一个 provider 分组**（走本地 st-rotator
+> 网关），上面那段 `nailong:` 块当时写的独立路由已被号池架构取代 —— 奶龙现在是号池里的一个**成员**（倍率 9.9，
+> 整活专用），不再是独立 provider。所以「走 `provider=nailong` 的 workflow 子代理」这条实测路径如今已不存在，
+> 上表数字改由 `_e2e_node.mjs` 直接对线上地址测得（同一套 HTTP 栈，等价性见上）。
+> 想再当独立 provider 用，把上面那段 YAML 原样加回去即可。
 
 ## 文件
 
 | 文件 | 作用 |
 | --- | --- |
 | `server.py` | Python 版服务本体，只用标准库（Python 3.10+） |
-| `art_hd.txt` | 默认那版图（照片转 ASCII，70 行 × 130 列）—— **改这个文件即可换图，无需重启** |
+| `art_hd.txt` | 默认那版图（块字符 `░▒▓`，53 行 × 93 列 / 4,245 字符）—— **改这个文件即可换图，改完跑一次 `python worker/build_art.py`** |
+| `art_hd.txt.bak-20261007-114556` | 换图前的旧版图（照片转 ASCII，70 行 × 130 列），回滚用 |
 | `smoke_test.py` | Python 版独立验收脚本，26 项判据 |
 | `verify_deployed.py` | 对**已部署**的线上地址做验收（固定带浏览器签名 UA，避开 CF 对 python-urllib 的 1010） |
+| `verify_live_node.mjs` | 用 Node 内置 fetch（**与 DSH 的 LLM 栈同一个 HTTP 客户端**）打线上地址的 9 项检查，顺带打印图的字符数/行数/sha256 |
 | `demo_request.py` | 手动调一发看效果（`--port / --path / --model / --key / --stream / --head`） |
 | `worker/src/index.js` | Cloudflare Workers 版服务本体 |
 | `worker/src/art.js` | **自动生成**的三版图，由 `build_art.py` 从 `server.py` + `art_hd.txt` 产出（别手改） |
@@ -154,11 +170,12 @@ settings.yaml 是**热重载**的，改完不用重启 DSH，GUI 的模型选择
 ## 验收
 
 ```powershell
-python smoke_test.py             # Python 版：26 项
-cd worker; node test_worker.mjs  # Worker 版：37 项
+python smoke_test.py                        # Python 版：26 项
+cd worker; node test_worker.mjs             # Worker 版：37 项
+cd ..; node verify_live_node.mjs https://gpt.caar.fun <key>   # 线上：9 项（Node fetch 栈）
 ```
 
-实测 **26/26 通过**（2026-10-07，Python 3.13）：三套接口的非流式内容与 `art_hd.txt` 逐字节相同（再剥掉围栏比对）；
+实测 **26/26 通过**（2026-10-07 换图后重跑，Python 3.13）：三套接口的非流式内容与 `art_hd.txt` 逐字节相同（再剥掉围栏比对）；
 三套流式拼接结果与非流式逐字符相同（证明没漏帧、没截断）；`[DONE]` 唯一；未知路径 / DELETE / OPTIONS / 畸形
 请求体一律 200 + 原图；`?art=` 三个版本都能切；401/404 两个错误体形状与 CORS 头都在。
 脚本自己先探端口占用，被占就退出，避免 Windows 上 `SO_REUSEADDR` 双绑导致「旧进程冒充新服务」。
@@ -201,9 +218,9 @@ python build_art.py    # 打印三版图的字符数 / 行数 / sha256
 node test_worker.mjs   # 顺手验一遍
 ```
 
-### 已部署实例（2026-10-07，v1.1.0）
+### 已部署实例（2026-10-07，v1.1.0；当日换图后重新部署）
 
-两个入口（Version ID `f705cbf7-7f40-43f1-80ec-f6a39e037ee3`，行为完全一致）：
+两个入口（Version ID `6c549d1b-f857-44ff-841f-db5a6193f5e6`，行为完全一致）：
 
 | 入口 | 地址 |
 | --- | --- |
@@ -220,6 +237,7 @@ python verify_deployed.py https://astra-fake-api.3152841984.workers.dev <key>
 实测两个入口各 **15/15 通过**：线上返回的图与本地 `art_hd.txt` 逐字节一致（围栏形态、剥壳后逐字节比对）、
 流式拼接一致、`[DONE]` 唯一、未知路径照回裸图、`/v1/models` id 清单一致、无 key → 401（带
 `WWW-Authenticate` 与 CORS）、未知模型 → 404 `model_not_found`、`OPTIONS` 不带 key 也 200。
+另加一组**用 Node 内置 fetch（= DSH 的 LLM 栈）直接打线上地址**的 9 项检查（`verify_live_node.mjs`），同样 9/9。
 
 > 部署时踩到的三个坑（都实测过）：
 > 1. `compatibility_date` 不能写「当天」。本机在 UTC+8，而 Cloudflare 按自己的时钟判定，
@@ -251,7 +269,10 @@ python verify_deployed.py https://astra-fake-api.3152841984.workers.dev <key>
   Python 版默认只绑 `127.0.0.1`；要用 `--host 0.0.0.0` 就自己承担后果。
 - **公网部署 = 全网都能来逗奶龙**：Worker 版一旦公开，`*.workers.dev` 很快会被扫到。
   这本来就是玩笑接口，别把它挂在任何跟真实业务有关的域名或路径下（尤其别配成某个客户端的默认 `base_url`）。
-- HD 版 130 列宽，手机/窄终端里会折行（这是图本身的分辨率，不是 bug；包进代码块后至少不会内部折行）。
+- HD 版 93 列宽，手机/窄终端里会折行（这是图本身的分辨率，不是 bug；包进代码块后至少不会内部折行）。
+- 现行那版图**第 0 行有一段 17 字符的孤立 `░`**（贴在 0–16 列），而第 1 行起内容从第 19 列开始 —— 这是
+  从会话里贴进来的原图就带的痕迹，本仓库**按字节原样收下**，没有自作主张修图。看着别扭就删掉那一行
+  （`art_hd.txt` 第 1 行），再跑一次 `python worker/build_art.py`。
 - 没有实现 tool_calls / function calling / 图片输入等真实能力——反正回答了也还是奶龙。
 - 未做 TLS、未做并发压测；Python 版用 `ThreadingHTTPServer`，只适合自娱自乐和本机演示。
 - **按 UA 挡机器人（`403 / error code: 1010`）—— 但只挡特定签名**：实测（同一出口 IP，两个入口各测一遍）：

@@ -40,7 +40,10 @@ BASE = f"http://127.0.0.1:{PORT}"
 
 BLOCK_MARK_A = "HA  HA  HA"
 BLOCK_MARK_B = "捧着肚子"
-HD_MIN_LINES = 60
+# 下限只用来抓「图被截断/为空」，不是图的规格。
+# 2026-10-07 换图：当前 art_hd.txt 是方块字符版（53 行 / 93 列 / 4,245 字符），
+# 旧的 %@@@ 照片版是 70 行 / 130 列，故原值 60 会误判新图为「不够大」。
+HD_MIN_LINES = 40
 
 # 1.1.0 起模型名换成上游真实存在的 id（此处硬编码即"独立判据"，不从 server.py import）
 EXPECTED_MODEL_IDS = ["gpt-6-astra", "gpt-6-astra-pro", "gpt-6-astra-20260903",

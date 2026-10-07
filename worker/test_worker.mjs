@@ -21,7 +21,10 @@ const BASE = "https://astra-fake-api.example.com";
 
 const BLOCK_MARK_A = "HA  HA  HA";
 const BLOCK_MARK_B = "捧着肚子";
-const HD_MIN_LINES = 60;
+// 下限只用来抓「图被截断/为空」，不是图的规格。
+// 2026-10-07 换图：当前 art_hd.txt 是方块字符版（53 行 / 93 列 / 4,245 字符），
+// 旧的 %@@@ 照片版是 70 行 / 130 列，故原值 60 会误判新图为「不够大」。
+const HD_MIN_LINES = 40;
 
 // 验收用自己的密钥与模型清单，不从源码 import（否则源码写错也跟着错）。
 const TEST_KEY = "sk-astra-test-4f9c1e2b7a0d";
