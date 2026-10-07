@@ -167,7 +167,7 @@ export function modelList(models) {
       root: m.id,
       parent: null,
       context_window: m.ctx,
-      multiplier: m.price,
+      multiplier: m.ratio,
     })),
   });
 }

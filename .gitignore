@@ -21,3 +21,8 @@ _*.png
 art_hd.txt.bak-*
 art_hd_new.txt
 art_hd_new_preview.png
+
+# 一次性工具与中间产物（正式交付的验收套件不带 _ 前缀）
+*.bak-*
+relay/_*
+

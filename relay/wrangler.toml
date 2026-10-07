@@ -9,6 +9,27 @@ routes = [
   { pattern = "api.caar.fun", custom_domain = true },
 ]
 
-# 本 Worker 刻意不需要任何 secret：
-#   - 它不接任何真实上游，也不持有任何真 key（它只会回一张奶龙）
-#   - 面板里所有「令牌/余额/用量」都是写死的假数据，登录表单纯前端、不发请求
+# 真数据库（D1 / SQLite）。账号、会话、令牌、调用日志都存在这里 —— 登录是真接库的。
+[[d1_databases]]
+binding       = "DB"
+database_name = "astra-fake-relay-db"
+database_id   = "a096d47a-4162-4c48-9e6e-d172c12f0b9e"
+
+# 静态资源：只有一张图 —— 扫码落地页 /pay 里显示的那张奶龙。
+# not_found_handling = "none" 是关键：命中资源由资源层直接返回（不进 Worker、不耗 CPU），
+# 没命中就落到 Worker 的 fetch 里（面板页、/v1、以及「其它一切 200 + 裸图」都靠这条）。
+[assets]
+directory            = "./public"
+html_handling        = "none"   # 关掉 /index.html 与 .html 后缀的自动映射，本站没有静态 HTML
+not_found_handling   = "none"   # 未命中 -> 交给 Worker
+
+# 变量（非 secret）。口令哈希的 PBKDF2 迭代次数。
+# 25000 是被 Cloudflare **免费版 10ms CPU/请求** 逼出来的数：本机实测每 1 万次约 1.7ms，
+# 10 万次要 16.8ms，必然报 1102（Worker exceeded CPU time limit）。
+# index.js 里会把它夹到 [1000, 60000] 再用，写错也炸不了。
+[vars]
+PBKDF2_ITER = "25000"
+
+# 仍然不需要任何 secret：
+#   - 不接任何真实上游，不持有任何真 key（/v1/* 只会回一张奶龙）
+#   - 口令只存 PBKDF2 派生值 + 随机盐；API key 只存 SHA-256，明文不落库
