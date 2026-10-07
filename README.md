@@ -7,6 +7,11 @@
 仓库里是**两套行为等价的实现**：`server.py`（Python 标准库，本机跑）和 `worker/`（Cloudflare Workers，云端跑）。
 两套各自带独立验收脚本，判据逐条对齐（26 项 / 37 项）。
 
+另外还有一个**独立的第三个 Worker**：`relay/` —— 一个伪装成「AI 中转站」的整活站（首页 / 登录 / 控制台 /
+模型广场 / 令牌 / 用量 / 充值 / 设置 / 文档 / 关于 十页，外加 `/api/*` 假面板接口），部署在
+**<https://api.caar.fun>**。它跟上面两套**不共享任何文件**，可以单独部署、单独删掉，见下面
+「假中转站」一节。
+
 > **v1.1.0（2026-10-07）加了两道闸**：API key（没 key 一律 401）与模型白名单（白名单外的模型名 404）。
 > 这刻意推翻了 v1.0 那句「任何调用都回奶龙、永不 404」——想退回原状就删掉 key 并放开白名单，见下面「鉴权」一节。
 
@@ -160,9 +165,16 @@ settings.yaml 是**热重载**的，改完不用重启 DSH，GUI 的模型选择
 | `demo_request.py` | 手动调一发看效果（`--port / --path / --model / --key / --stream / --head`） |
 | `worker/src/index.js` | Cloudflare Workers 版服务本体 |
 | `worker/src/art.js` | **自动生成**的三版图，由 `build_art.py` 从 `server.py` + `art_hd.txt` 产出（别手改） |
-| `worker/build_art.py` | 上面那个生成器 —— 图只有一份来源，防止两边跑偏 |
+| `worker/build_art.py` | 上面那个生成器 —— 图只有一份来源，防止跑偏；会**同时**写 `worker/src/art.js` 与 `relay/src/art.js` |
 | `worker/test_worker.mjs` | Worker 版独立验收脚本，37 项判据（纯 Node，不连云、不用装 wrangler） |
 | `worker/wrangler.toml` | 部署配置（含 `gpt.caar.fun` 自定义域名路由、`workers_dev` 开关、日期与原因注释） |
+| `relay/wrangler.toml` | 假中转站的部署配置（`api.caar.fun` 自定义域名，**不需要任何 secret**） |
+| `relay/src/index.js` | 假中转站的路由（10 个页面 + `/api/*` + 两套协议族 + catch-all） |
+| `relay/src/pages.js` | 那 10 个页面的 HTML/CSS/内联 JS（纯模板字符串，零依赖、零构建步骤） |
+| `relay/src/nailong.js` | 假中转站这边的奶龙引擎（与 `worker/src/index.js` 里的逻辑刻意重复一份，让两个 Worker 互不依赖） |
+| `relay/src/art.js` | **自动生成**，与 `worker/src/art.js` 字节相同（同一个生成器写两份） |
+| `relay/test_relay.mjs` | 假中转站本地验收脚本，68 项判据（纯 Node，不起服务） |
+| `relay/verify_live.mjs` | 假中转站线上验收脚本，37 项判据（逐字节比对 `art_hd.txt`） |
 | `start.cmd` | 双击启动（纯 ASCII，避免 cmd 解析中文的坑） |
 | `extract_pasted_art.py` | 从 DSH 会话日志里把粘贴的图字节精确抠出来（手抄必然出错才写的） |
 | `art_hd_preview.png` | 上面那张图的 PNG 预览，方便肉眼看 |
@@ -173,6 +185,8 @@ settings.yaml 是**热重载**的，改完不用重启 DSH，GUI 的模型选择
 python smoke_test.py                        # Python 版：26 项
 cd worker; node test_worker.mjs             # Worker 版：37 项
 cd ..; node verify_live_node.mjs https://gpt.caar.fun <key>   # 线上：9 项（Node fetch 栈）
+node relay/test_relay.mjs                   # 假中转站本地：68 项
+node relay/verify_live.mjs https://api.caar.fun               # 假中转站线上：37 项
 ```
 
 实测 **26/26 通过**（2026-10-07 换图后重跑，Python 3.13）：三套接口的非流式内容与 `art_hd.txt` 逐字节相同（再剥掉围栏比对）；
@@ -248,6 +262,83 @@ python verify_deployed.py https://astra-fake-api.3152841984.workers.dev <key>
 > 3. **挂自定义域名并不能绕开 1010**：`caar.fun` 这个 zone 的 `browser_check = on`，所以换成自己的域名后，
 >    python-urllib 这类签名依旧被挡（同一个 `error code: 1010`）。那是 zone 级设置，与 `*.workers.dev` 无关。
 >    不过实测 curl 与各家 SDK 的默认 UA 在两个入口都是 200 —— 详见文末「已知限制」里的实测表。
+
+## 假中转站（`relay/`，<https://api.caar.fun>）
+
+一个**看起来像 new-api / one-api 那类中转站**的整活站：有首页、登录页、控制台、模型广场、令牌管理、
+用量统计、充值页、设置页、文档、关于，共 10 页；`/api/*` 下一整套 `{success, message, data}` 形状的
+面板接口（含登录、用户信息、令牌、用量、充值、状态）。**所有数字都是硬编码的**，所有按钮都是前端装饰。
+
+![首页](relay-preview.png)
+
+![控制台](relay-preview-panel.png)
+
+同时它自己就是一个 API 中转站外形：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、
+`/v1/messages/count_tokens`、`GET /v1/models` 全都有，**每个调用都只回奶龙**。
+
+### 它跟上面两套的三处刻意不同
+
+| | 主服务（`server.py` / `worker/`） | 假中转站（`relay/`） |
+| --- | --- | --- |
+| 鉴权 | v1.1.0 起要 key，没 key **401** | **没有闸**：带 key、不带 key、假 key 一律 200 回奶龙 |
+| 未知模型名 | **404** `model_not_found` | **照回奶龙**（不 404），模型名原样回显 |
+| 站点外壳 | 无页面，纯 API | 10 个页面 + `/api/*` 假面板 |
+
+这三条是**故意的**：中转站的梗在于「你以为要注册充值，其实它连你是谁都不关心」，加鉴权反而把笑话讲砸了。
+所以它和主服务不是同一个契约，验收脚本也是各写一套。
+
+### 模型广场卖的 8 个 id 都是上游真名
+
+5 个 Astra 系列沿用主服务那张表（`platform.openai.com/docs/models/<slug>` 200 核对过），
+另外 3 个是**从本机号池的 `GET /v1/models` 里抄的真名**：`deepseek-v4.1-flash`、`glm-5.2`、`kimi-k3`。
+`/v1/models` 返回的清单与模型广场页面**逐条一致**（验收里有一条专门比对这两处，防止改一处忘另一处）。
+
+### 实测数字（2026-10-07）
+
+- 流式：**55 个内容帧 + 1 个 usage 帧**，拼接结果与非流式**逐字符相同**，`data: [DONE]` 恰好一个。
+- 正文围栏长度是**按图现算**的（最长反引号串 +1），当前那张图 0 个反引号 ⇒ 围栏正好 3。
+- 响应头固定带：`Access-Control-Allow-Origin: *`、`X-Powered-By: nailong-laughing-engine`、
+  `X-Nailong: laughing`、`X-Relay-Note: fake-relay; every call returns a nailong; no key required`、
+  `Cache-Control: no-store`。
+- 任意未知路径 / 未知方法 → **200 + 裸图**（`text/plain`），不是 404；`OPTIONS` → 204。
+
+### 部署与验收
+
+```powershell
+cd relay
+$env:CLOUDFLARE_API_TOKEN = '<账号级 token>'
+$env:CLOUDFLARE_ACCOUNT_ID = '<account id>'
+$env:CI = '1'
+npx wrangler deploy          # 不需要任何 secret
+```
+
+本地（不起服务、直接 import Worker 模块）：
+
+```powershell
+node relay/test_relay.mjs                    # 68 项：页面 / 两套协议 / 假面板 / 静态自检 / 图与围栏
+node relay/verify_live.mjs https://api.caar.fun   # 37 项：对线上部署产物，逐字节比对 art_hd.txt
+```
+
+实测 **68 PASS / 0 FAIL**（本地）与 **37 PASS / 0 FAIL**（线上，两个入口 `api.caar.fun` 与
+`astra-fake-relay.3152841984.workers.dev` 各跑一遍）。线上那 37 项覆盖 10 个页面全部可达、
+两套协议族非流式与流式逐字节一致、55+1 帧、`/api/*` 全部形状、4 条乱路径的 catch-all、
+响应头、`OPTIONS` 204、`robots.txt`。
+
+### 伦理边界（这条是硬约束，写在代码里）
+
+会做的是「**一个只会回奶龙、什么都不收集的整活站**」；不会做的是「**骗陌生人交 key 或付钱的钓鱼站**」。
+后者不建，前者用下面这些设计把边界钉住（每一条都有机器可查的判据）：
+
+- **登录表单不发任何东西**：`fakeLogin` 只写 `localStorage` 然后跳页。验收里有一条静态检查：
+  `pages.js` 里不得出现 `fetch(` / `XMLHttpRequest` / `sendBeacon`，也不得有 `action=` 属性。
+- **充值页的二维码是画的**，并且盖了「**本站不收钱**」的戳，旁边写明「请不要付款」。
+- **每一页页脚**都有「本站是整活站，不是真中转站」的声明，另有独立的 `/about` 页；
+  `/api/status` 的返回体里也自带这句免责声明。
+- **没有任何外部资源加载**（验收里有一条正则专门查 `src=https://` / `<link href=https://` /
+  `@import url(` / `url(https://`），也没有任何 `console.*` 输出。
+- `robots.txt` 是 `Disallow: /`，页面带 `<meta name="robots" content="noindex">` —— 不主动往搜索引擎里塞。
+- **完全不读请求体**：`readRequest()` 只为了回显 `model` / `stream` 两个字段才读一下，读完即弃，
+  不落盘、不打日志（`relay/src/index.js` 里连一个 `console.log` 都没有）。
 
 ## 设计上的几个刻意选择
 

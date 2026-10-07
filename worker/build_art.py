@@ -28,7 +28,10 @@ for _s in (sys.stdout, sys.stderr):
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
-OUT = HERE / "src" / "art.js"
+# 图只有一份来源，但要同时喂两套 Worker：主服务 + 假中转站（relay/）。
+OUTS = [HERE / "src" / "art.js"]
+if (ROOT / "relay").is_dir():
+    OUTS.append(ROOT / "relay" / "src" / "art.js")
 
 
 def load_server_module():
@@ -61,10 +64,11 @@ def main() -> int:
         lines.append(f"export const {name} = {json.dumps(value, ensure_ascii=False)};")
         lines.append("")
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text("\n".join(lines), encoding="utf-8", newline="\n")
-
-    print(f"[√] 已写入 {OUT}  ({OUT.stat().st_size:,} B)", flush=True)
+    payload = "\n".join(lines)
+    for out in OUTS:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(payload, encoding="utf-8", newline="\n")
+        print(f"[√] 已写入 {out}  ({out.stat().st_size:,} B)", flush=True)
     for name, value in arts.items():
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
         rows = value.count("\n") + 1 if value else 0

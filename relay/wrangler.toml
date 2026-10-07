@@ -1,0 +1,14 @@
+# 假中转站（整活站）的部署配置。
+# 与主服务 astra-fake-api 是两个独立的 Worker，各占一个域名，互不影响。
+name = "astra-fake-relay"
+main = "src/index.js"
+compatibility_date = "2026-10-01"   # 不要写「当天」：本机 UTC+8 已跨日而 CF 按自己时钟判，会报 code 10021
+workers_dev = true                  # 配了 routes 之后 wrangler 会默认关掉 workers.dev，必须显式打开
+
+routes = [
+  { pattern = "api.caar.fun", custom_domain = true },
+]
+
+# 本 Worker 刻意不需要任何 secret：
+#   - 它不接任何真实上游，也不持有任何真 key（它只会回一张奶龙）
+#   - 面板里所有「令牌/余额/用量」都是写死的假数据，登录表单纯前端、不发请求
